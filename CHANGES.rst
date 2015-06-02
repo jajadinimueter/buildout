@@ -4,6 +4,65 @@ Change History
 Unreleased
 ==========
 
+- Undo breakage on Windows machines where ``sys.prefix`` can also be a
+  ``site-packages`` directory:  don't remove it from ``sys.path``.  See
+  https://github.com/buildout/buildout/issues/217
+
+- Remove assumption that ``pkg_resources`` is a module (untrue since 
+  release of `setuptools 8.3``).  See
+  https://github.com/buildout/buildout/issues/227
+
+2.3.1 (2014-12-16)
+==================
+
+- Fixed: Buildout merged single-version requirements with
+  version-range requirements in a way that caused it to think there
+  wasn't a single-version requirement.  IOW, buildout throught that
+  versions were being picked when they weren't.
+
+- Suppress spurios (and possibly non-spurious) version-parsing warnings.
+
+2.3.0 (2014-12-14)
+==================
+
+- Buildout is now compatible with (and requires) setuptools 8.
+
+2.2.5 (2014-11-04)
+==================
+
+- Improved fix for #198: when bootstrapping with an extension, buildout was
+  too strict on itself, resulting in an inability to upgrade or downgrade its
+  own version.
+  [reinout]
+
+- Setuptools must be at 3.3 or higher now. If you use the latest bootstrap
+  from http://downloads.buildout.org/2/bootstrap.py you're all set.
+  [reinout]
+
+- Installing *recipes* that themselves have dependencies used to fail with a
+  VersionConflict if such a dependency was installed globally with a lower
+  version. Buildout now ignores the version conflict in those cases and simply
+  installs the correct version.
+  [reinout]
+
+2.2.4 (2014-11-01)
+==================
+
+- Fix for #198: buildout 2.2.3 caused a version conflict when bootstrapping a
+  buildout with a version pinned to an earlier one. Same version conflict
+  could occur with system-wide installed packages that were newer than the
+  pinned version.
+  [reinout]
+
+2.2.3 (2014-10-30)
+==================
+
+- Fix #197, Python 3 regression
+  [aclark4life]
+
+2.2.2 (2014-10-30)
+==================
+
 - Open files for ``exec()`` in universal newlines mode.  See
   https://github.com/buildout/buildout/issues/130
 
@@ -12,6 +71,9 @@ Unreleased
 
 - Close various files when finished writing to them. This avoids
   ResourceWarnings on Python 3, and better supports doctests under PyPy.
+
+- Introduce improved easy_install Install.install function. This is present
+  in 1.5.X and 1.7X but was never merged into 2.X somehow.
 
 2.2.1 (2013-09-05)
 ==================

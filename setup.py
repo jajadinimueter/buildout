@@ -12,7 +12,7 @@
 #
 ##############################################################################
 name = "zc.buildout"
-version = "2.2.2dev-hp"
+version = "2.3.1"
 
 import os
 from setuptools import setup
@@ -88,7 +88,7 @@ setup(
     package_dir = {'': 'src'},
     namespace_packages = ['zc'],
     install_requires = [
-        'setuptools>=0.7',
+        'setuptools>=8.0',
     ],
     include_package_data = True,
     entry_points = entry_points,
@@ -104,8 +104,8 @@ setup(
        'Programming Language :: Python :: 3',
        'Programming Language :: Python :: 3.2',
        'Programming Language :: Python :: 3.3',
+       'Programming Language :: Python :: 3.4',
        'Topic :: Software Development :: Build Tools',
        'Topic :: Software Development :: Libraries :: Python Modules',
        ],
     )
-

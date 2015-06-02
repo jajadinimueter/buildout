@@ -2711,28 +2711,7 @@ def test_constrained_requirement():
     ... ('x',        '1',        'x==1'),
     ... ('x>1',      '2',        'x==2'),
     ... ('x>3',      '2',        IncompatibleConstraintError),
-    ... ('x>1',      '>2',       'x>2'),
-    ... ('x>1',      '> 2',      'x>2'),
-    ... ('x>1',      '>=2',      'x>=2'),
-    ... ('x<1',      '>2',       IncompatibleConstraintError),
-    ... ('x<=1',     '>=1',      'x>=1,<1,==1'),
-    ... ('x<3',      '>1',       'x>1,<3'),
-    ... ('x==2',     '>1',       'x==2'),
-    ... ('x==2',     '>=2',      'x==2'),
-    ... ('x[y]',     '1',        'x[y]==1'),
-    ... ('x[y]>1',   '2',        'x[y]==2'),
-    ... ('x<3',      '2',        'x==2'),
-    ... ('x<1',      '2',        IncompatibleConstraintError),
-    ... ('x<3',      '<2',       'x<2'),
-    ... ('x<3',      '< 2',      'x<2'),
-    ... ('x<3',      '<=2',      'x<=2'),
-    ... ('x<3',      '<= 2',     'x<=2'),
-    ... ('x>3',      '<2',       IncompatibleConstraintError),
-    ... ('x>=1',     '<=1',      'x<=1,>1,==1'),
-    ... ('x<3',      '>1',       'x>1,<3'),
-    ... ('x==2',     '<3',       'x==2'),
-    ... ('x==2',     '<=2',      'x==2'),
-    ... ('x[y]<3',      '2',     'x[y]==2'),
+    ... ('x>1',      '>2',       'x>1,>2'),
     ... ]
     >>> from zc.buildout.easy_install import _constrained_requirement
     >>> for o, c, e in examples:
@@ -2829,13 +2808,14 @@ def want_new_zcrecipeegg():
     ... eggs = demo
     ... ''')
     >>> print_(system(join('bin', 'buildout')), end='') # doctest: +ELLIPSIS
-    The constraint, >=2.0.0a3,...
+    Getting distribution for 'zc.recipe.egg<2dev,>=2.0.0a3'.
     While:
       Installing.
       Getting section egg.
       Initializing section egg.
       Installing recipe zc.recipe.egg <2dev.
-    Error: Bad constraint >=2.0.0a3 zc.recipe.egg<2dev
+      Getting distribution for 'zc.recipe.egg<2dev,>=2.0.0a3'.
+    Error: Couldn't find a distribution for 'zc.recipe.egg<2dev,>=2.0.0a3'.
     """
 
 def macro_inheritance_bug():
@@ -3204,10 +3184,10 @@ def makeNewRelease(project, ws, dest, version='99.99'):
         zip = zipfile.ZipFile(dest, 'a')
         zip.writestr(
             'EGG-INFO/PKG-INFO',
-            ((zip.read('EGG-INFO/PKG-INFO').decode()
+            ((zip.read('EGG-INFO/PKG-INFO').decode('ISO-8859-1')
               ).replace("Version: %s" % oldver,
                         "Version: %s" % version)
-             ).encode()
+             ).encode('ISO-8859-1')
             )
         zip.close()
     else:
@@ -3504,6 +3484,8 @@ def test_suite():
                 # bootstrap_crashes_with_egg_recipe_in_buildout_section
                 (re.compile(r"Unused options for buildout: 'eggs' 'scripts'\."),
                  "Unused options for buildout: 'scripts' 'eggs'."),
+                # Python 3.4 changed the wording of NameErrors
+                (re.compile('NameError: global name'), 'NameError: name'),
                 ]),
             ),
         zc.buildout.rmtree.test_suite(),

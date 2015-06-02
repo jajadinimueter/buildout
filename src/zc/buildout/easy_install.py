@@ -35,6 +35,10 @@ import subprocess
 import sys
 import tempfile
 import zc.buildout
+import warnings
+
+warnings.filterwarnings(
+    'ignore', '.+is being parsed as a legacy, non PEP 440, version')
 
 _oprp = getattr(os.path, 'realpath', lambda path: path)
 def realpath(path):
@@ -421,10 +425,10 @@ class Installer:
 
         # Now find the best one:
         best = []
-        bestv = ()
+        bestv = None
         for dist in dists:
             distv = dist.parsed_version
-            if distv > bestv:
+            if bestv is None or distv > bestv:
                 best = [dist]
                 bestv = distv
             elif distv == bestv:
@@ -465,8 +469,7 @@ class Installer:
 
         return dist.clone(location=new_location)
 
-    def _get_dist(self, requirement, ws):
-
+    def _get_dist(self, requirement, ws, for_buildout_run=False):
         __doing__ = 'Getting distribution for %r.', str(requirement)
 
         # Maybe an existing dist is already the best dist that satisfies the
@@ -513,8 +516,6 @@ class Installer:
                         # obtained locally.  Just copy it.
                         shutil.copytree(dist.location, newloc)
                     else:
-
-
                         setuptools.archive_util.unpack_archive(
                             dist.location, newloc)
 
@@ -532,6 +533,13 @@ class Installer:
                         dist.location, ws, self._dest, dist)
                     for dist in dists:
                         redo_pyc(dist.location)
+                        if for_buildout_run:
+                            # ws is the global working set and we're
+                            # installing buildout, setuptools, extensions or
+                            # recipes. Make sure that whatever correct version
+                            # we've just installed is the active version,
+                            # hence the ``replace=True``.
+                            ws.add(dist, replace=True)
 
             finally:
                 if tmp != self._download_cache:
@@ -608,6 +616,7 @@ class Installer:
 
         logger.debug('Installing %s.', repr(specs)[1:-1])
 
+        for_buildout_run = bool(working_set)
         path = self._path
         dest = self._dest
         if dest is not None and dest not in path:
@@ -616,48 +625,74 @@ class Installer:
         requirements = [self._constrain(pkg_resources.Requirement.parse(spec))
                         for spec in specs]
 
-
-
         if working_set is None:
             ws = pkg_resources.WorkingSet([])
         else:
             ws = working_set
 
         for requirement in requirements:
-            for dist in self._get_dist(requirement, ws):
+            for dist in self._get_dist(requirement, ws,
+                                       for_buildout_run=for_buildout_run):
                 ws.add(dist)
                 self._maybe_add_setuptools(ws, dist)
 
         # OK, we have the requested distributions and they're in the working
-        # set, but they may have unmet requirements.  We'll simply keep
-        # trying to resolve requirements, adding missing requirements as they
-        # are reported.
-        #
-        # Note that we don't pass in the environment, because we want
+        # set, but they may have unmet requirements.  We'll resolve these
+        # requirements. This is code modified from
+        # pkg_resources.WorkingSet.resolve.  We can't reuse that code directly
+        # because we have to constrain our requirements (see
+        # versions_section_ignored_for_dependency_in_favor_of_site_packages in
+        # zc.buildout.tests).
+        requirements.reverse() # Set up the stack.
+        processed = {}  # This is a set of processed requirements.
+        best = {}  # This is a mapping of package name -> dist.
+        # Note that we don't use the existing environment, because we want
         # to look for new eggs unless what we have is the best that
         # matches the requirement.
-        while 1:
-            try:
-                ws.resolve(requirements)
-            except pkg_resources.DistributionNotFound:
-                err = sys.exc_info()[1]
-                [requirement] = err.args
-                requirement = self._constrain(requirement)
-                if dest:
-                    logger.debug('Getting required %r', str(requirement))
-                else:
-                    logger.debug('Adding required %r', str(requirement))
-                _log_requirement(ws, requirement)
+        env = pkg_resources.Environment(ws.entries)
 
-                for dist in self._get_dist(requirement, ws):
+        while requirements:
+            # Process dependencies breadth-first.
+            current_requirement = requirements.pop(0)
+            req = self._constrain(current_requirement)
+            if req in processed:
+                # Ignore cyclic or redundant dependencies.
+                continue
+            dist = best.get(req.key)
+            if dist is None:
+                try:
+                    dist = env.best_match(req, ws)
+                except pkg_resources.VersionConflict as err:
+                    logger.debug(
+                        "Version conflict while processing requirement %s "
+                        "(constrained to %s)",
+                        current_requirement, req)
+                    # Installing buildout itself and its extensions and
+                    # recipes requires the global
+                    # ``pkg_resources.working_set`` to be active, which also
+                    # includes all system packages. So there might be
+                    # conflicts, which are fine to ignore. We'll grab the
+                    # correct version a few lines down.
+                    if not for_buildout_run:
+                        raise VersionConflict(err, ws)
+            if dist is None:
+                if dest:
+                    logger.debug('Getting required %r', str(req))
+                else:
+                    logger.debug('Adding required %r', str(req))
+                _log_requirement(ws, req)
+                for dist in self._get_dist(req, ws,
+                                           for_buildout_run=for_buildout_run):
                     ws.add(dist)
                     self._maybe_add_setuptools(ws, dist)
-            except pkg_resources.VersionConflict:
-                err = sys.exc_info()[1]
-                raise VersionConflict(err, ws)
-            else:
-                break
+            if dist not in req:
+                # Oops, the "best" so far conflicts with a dependency.
+                raise VersionConflict(
+                    pkg_resources.VersionConflict(dist, req), ws)
 
+            best[req.key] = dist
+            requirements.extend(dist.requires(req.extras)[::-1])
+            processed[req] = True
         return ws
 
     def build(self, spec, build_ext):
@@ -1319,9 +1354,13 @@ class VersionConflict(zc.buildout.UserError):
         result = ["There is a version conflict.",
                   "We already have: %s" % existing_dist,
                   ]
+        stated = False
         for dist in self.ws:
             if req in dist.requires():
                 result.append("but %s requires %r." % (dist, str(req)))
+                stated = True
+        if not stated:
+            result.append("We require %s" % req)
         return '\n'.join(result)
 
 
@@ -1365,12 +1404,8 @@ def _fix_file_links(links):
                 link += '/'
         yield link
 
-_final_parts = '*final-', '*final'
 def _final_version(parsed_version):
-    for part in parsed_version:
-        if (part[:1] == '*') and (part not in _final_parts):
-            return False
-    return True
+    return not parsed_version.is_prerelease
 
 def redo_pyc(egg):
     if not os.path.isdir(egg):
@@ -1407,13 +1442,28 @@ def redo_pyc(egg):
                 call_subprocess(args)
 
 def _constrained_requirement(constraint, requirement):
-    return pkg_resources.Requirement.parse(
-        "%s[%s]%s" % (
-            requirement.project_name,
-            ','.join(requirement.extras),
-            _constrained_requirement_constraint(constraint, requirement)
+    if constraint[0] not in '<>':
+        if constraint.startswith('='):
+            assert constraint.startswith('==')
+            constraint = constraint[2:]
+        if constraint not in requirement:
+            bad_constraint(constraint, requirement)
+
+        # Sigh, copied from Requirement.__str__
+        extras = ','.join(requirement.extras)
+        if extras:
+            extras = '[%s]' % extras
+        return pkg_resources.Requirement.parse(
+            "%s%s==%s" % (requirement.project_name, extras, constraint))
+
+    if requirement.specs:
+        return pkg_resources.Requirement.parse(
+            str(requirement) + ',' + constraint
             )
-        )
+    else:
+        return pkg_resources.Requirement.parse(
+            str(requirement) + ' ' + constraint
+            )
 
 class IncompatibleConstraintError(zc.buildout.UserError):
     """A specified version is incompatible with a given requirement.
@@ -1425,91 +1475,3 @@ def bad_constraint(constraint, requirement):
     logger.error("The constraint, %s, is not consistent with the "
                  "requirement, %r.", constraint, str(requirement))
     raise IncompatibleConstraintError("Bad constraint", constraint, requirement)
-
-_parse_constraint = re.compile(r'([<>]=?)\s*(\S+)').match
-_comparef = {
-    '>' : lambda x, y: x >  y,
-    '>=': lambda x, y: x >= y,
-    '<' : lambda x, y: x <  y,
-    '<=': lambda x, y: x <= y,
-    }
-_opop = {'<': '>', '>': '<'}
-_opeqop = {'<': '>=', '>': '<='}
-def _constrained_requirement_constraint(constraint, requirement):
-
-    # Simple cases:
-
-    # No specs to merge with:
-    if not requirement.specs:
-        if not constraint[0] in '<=>':
-            constraint = '==' + constraint
-        return constraint
-
-    # Simple single-version constraint:
-    if constraint[0] not in '<>':
-        if constraint.startswith('='):
-            assert constraint.startswith('==')
-            constraint = constraint[2:]
-        if constraint in requirement:
-            return '=='+constraint
-        bad_constraint(constraint, requirement)
-
-
-    # OK, we have a complex constraint (<. <=, >=, or >) and specs.
-    # In many cases, the spec needs to filter constraints.
-    # In other cases, the constraints need to limit the constraint.
-
-    specs = requirement.specs
-    cop, cv = _parse_constraint(constraint).group(1, 2)
-    pcv = pkg_resources.parse_version(cv)
-
-    # Special case, all of the specs are == specs:
-    if not [op for (op, v) in specs if op != '==']:
-        # There aren't any non-== specs.
-
-        # See if any of the specs satisfy the constraint:
-        specs = [op+v for (op, v) in specs
-                 if _comparef[cop](pkg_resources.parse_version(v), pcv)]
-        if specs:
-            return ','.join(specs)
-
-        bad_constraint(constraint, requirement)
-
-    cop0 = cop[0]
-
-    # Normalize specs by splitting >= and <= specs. We need to do this
-    # because these have really weird semantics. Also cache parsed
-    # versions, which we'll need for comparisons:
-    specs = []
-    for op, v in requirement.specs:
-        pv = pkg_resources.parse_version(v)
-        if op == _opeqop[cop0]:
-            specs.append((op[0], v, pv))
-            specs.append(('==', v, pv))
-        else:
-            specs.append((op, v, pv))
-
-    # Error if there are opposite specs that conflict with the constraint
-    # and there are no equal specs that satisfy the constraint:
-    if [v for (op, v, pv) in specs
-        if op == _opop[cop0] and _comparef[_opop[cop0]](pv, pcv)
-        ]:
-        eqspecs = [op+v for (op, v, pv) in specs
-                   if _comparef[cop](pv, pcv)]
-        if eqspecs:
-            # OK, we do, use these:
-            return ','.join(eqspecs)
-
-        bad_constraint(constraint, requirement)
-
-    # We have a combination of range constraints and eq specs that
-    # satisfy the requirement.
-
-    # Return the constraint + the filtered specs
-    return ','.join(
-        op+v
-        for (op, v) in (
-            [(cop, cv)] +
-            [(op, v) for (op, v, pv) in specs if _comparef[cop](pv, pcv)]
-            )
-        )
